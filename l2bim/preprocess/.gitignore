@@ -1,0 +1,7 @@
+*.log
+*.pcd
+*.pkl
+*.png
+*.dxf
+*.json
+__pycache__
