@@ -15,6 +15,7 @@
 - [阶段三：LiDAR2BIM-Registration（C++ / Python）](#阶段三lidar2bim-registrationc--python)
 - [依赖版本冲突分析与解决](#依赖版本冲突分析与解决)
 - [模型权重与数据下载](#模型权重与数据下载)
+- [阶段二 → 阶段三 衔接脚本](#阶段二--阶段三-衔接脚本)
 - [常见问题](#常见问题)
 - [完整依赖版本清单](#完整依赖版本清单)
 
@@ -475,6 +476,100 @@ pip install transformers==4.38.2
 | bert-base-uncased | 阶段一 | [夸克网盘](https://pan.quark.cn/s/e6cda95e1ca1) |
 | LiBIM-UST 数据集 | 阶段三 | [OneDrive](https://hkustconnect-my.sharepoint.com/:u:/g/personal/hhuangce_connect_ust_hk/ERoCJi5Q5EZGudr8pQYOXsMBjUsin82b0RYxDVmVQmYCDg?e=ecnrwF) |
 | LiBIM-UST processed | 阶段三（可选，跳过预处理） | [OneDrive](https://hkustconnect-my.sharepoint.com/:u:/g/personal/hhuangce_connect_ust_hk/EYiHE-lKVwdLgLRxfDWMpTwBok3Dk_OjmkSkhejte-FcfA?e=AljpIr) |
+
+---
+
+## 阶段二 → 阶段三 衔接脚本
+
+阶段二的输出和阶段三的输入之间存在格式差异，需要通过 `stage2_to_stage3.py` 衔接。
+
+### 核心原理
+
+```
+阶段二输出 (removed.pcd / colorized.pcd + info.txt + points.txt)
+    ↓ 语义分离 (walls / ground)
+    ↓ 按高度裁剪 (0.2m ~ 1.9m)
+    ↓ 投影到 z=0 平面
+    ↓ Points2Image 生成二值图像
+    ↓ OpenCV HoughLinesP 检测线段
+    ↓ 像素坐标 → 物理坐标
+阶段三输出 (linesegs.txt + walls_2d.png)
+```
+
+### 两种使用模式
+
+**(a) 完整模式** — 语义分离 + 线段提取
+
+适用于阶段二完整运行后，有全部输出文件时：
+
+```bash
+python stage2_to_stage3.py <阶段二输出目录> \
+    --slam <colorized.pcd路径> \
+    --output pipeline_output
+```
+
+例如：
+
+```bash
+python stage2_to_stage3.py \
+    PointCloud_Segement_v0/test_data/outputs/obb-merge02 \
+    --slam PointCloud_Segement_v0/test_data/colorized.pcd \
+    --output pipeline_output
+```
+
+此模式会：
+1. 读取 `colorized.pcd`（原始 SLAM 点云）
+2. 用 `info.txt` + `points.txt` 按语义标签分离出 `walls.pcd` 和 `ground.pcd`
+3. 从墙壁点云提取 2D 线段
+
+**(b) 简化模式** — 直接从单个点云生成线段
+
+适用于没有完整语义数据，或者已经有一个背景点云时：
+
+```bash
+python stage2_to_stage3.py --simple <点云文件.pcd> --output pipeline_output
+```
+
+例如：
+
+```bash
+# 直接用 removed.pcd（已剔除家具的背景点云）
+python stage2_to_stage3.py \
+    --simple PointCloud_Segement_v0/test_data/outputs/obb-merge02/removed.pcd \
+    --output pipeline_output
+```
+
+> **前提条件**：输入点云的 Z 轴需大致与重力方向对齐（地面水平）。
+> SLAM 输出的点云通常已满足此条件。
+
+### 可调参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--min-height` | 0.2 | 墙壁最低高度（米），低于此高度的点被排除 |
+| `--max-height` | 1.9 | 墙壁最高高度（米），高于此高度的点被排除 |
+| `--scale` | 60 | 投影比例（像素/米），值越大图像越精细 |
+| `--dilate` | 3 | 膨胀核大小，连接相邻点 |
+| `--hough-threshold` | 60 | Hough 变换累加器阈值 |
+| `--hough-min-length` | 30 | 最小线段长度（像素） |
+| `--hough-max-gap` | 30 | 线段内最大间隙（像素） |
+
+### 输出文件
+
+| 文件 | 说明 |
+|------|------|
+| `walls.pcd` | 分离后的墙壁点云（仅完整模式） |
+| `ground.pcd` | 分离后的地面点云（仅完整模式） |
+| `walls_2d.png` | 2D 投影二值图像 |
+| `linesegs.txt` | 2D 线段，每行 `x1 y1 x2 y2`（物理坐标，单位：米） |
+
+### 依赖
+
+```bash
+pip install open3d opencv-python pillow numpy
+```
+
+> 注意：此脚本不依赖阶段三的 import 链，所有核心逻辑已内联实现。
 
 ---
 

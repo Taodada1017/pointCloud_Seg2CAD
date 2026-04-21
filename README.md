@@ -40,6 +40,11 @@ PointCloud2CAD/
 
 ---
 
+> 📖 **详细流程文档**：三个阶段的完整串联方式、数据流转细节、每个模块的输入输出格式说明，
+> 请查阅 **[docs/PIPELINE.md](docs/PIPELINE.md)**。
+
+---
+
 ## Pipeline 总览
 
 ```
