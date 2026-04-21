@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer, BertModel, BertTokenizer, RobertaModel, RobertaTokenizerFast
 
-local_path = "/home/chenxiaozhi/develop/weights/bert-base-uncased"
+local_path = "/root/.openclaw/workspace/pointCloud_Seg2CAD/rma-dino-sam/weights/bert-base-uncased"
 
 def get_tokenlizer(text_encoder_type):
     if not isinstance(text_encoder_type, str):

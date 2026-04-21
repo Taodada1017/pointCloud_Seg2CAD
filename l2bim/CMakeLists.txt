@@ -121,7 +121,7 @@ target_sources(pcd_projection PRIVATE
   src/frontend/geometry/point_cloud.cpp
   src/utils/raster_utils.cpp
 )
-target_link_libraries(pcd_projection PRIVATE ${PCL_LIBRARIES} opencv_core opencv_imgproc opencv_imgcodecs opencv_highgui)
+target_link_libraries(pcd_projection PRIVATE ${PCL_LIBRARIES} opencv_core opencv_imgproc opencv_imgcodecs opencv_highgui opencv_ximgproc)
 
 # Projection + line detection example
 add_executable(pcd2line_test examples/cpp/pcd2line_test.cpp)

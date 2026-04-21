@@ -128,7 +128,7 @@ class GroupWiseLinear(nn.Module):
 
 
 def init_tokenizer(text_encoder_type="D:/develope/projects_all/LLM/gsam/huggingface/bert-base-uncased"):
-    tokenizer = BertTokenizer.from_pretrained("/home/chenxiaozhi/develop/weights/bert-base-uncased")
+    tokenizer = BertTokenizer.from_pretrained("/root/.openclaw/workspace/pointCloud_Seg2CAD/rma-dino-sam/weights/bert-base-uncased")
     tokenizer.add_special_tokens({'bos_token': '[DEC]'})
     tokenizer.add_special_tokens({'additional_special_tokens': ['[ENC]']})
     tokenizer.enc_token_id = tokenizer.additional_special_tokens_ids[0]

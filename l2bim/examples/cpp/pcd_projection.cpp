@@ -53,7 +53,7 @@ namespace
 
         // Multi-slice voting for robust wall projection.
         int numSlices = 10;
-        int minVotes = 6;
+        int minVotes = 2;
 
         // Ground segmentation
         double groundDistThresh = 0.3;
@@ -764,38 +764,85 @@ static int runPcdProjection(const ProjectionOptions &opt)
 
     const int numSlices = std::max(1, opt.numSlices);
     const int minVotes = std::max(1, opt.minVotes);
-    if (opt.upperZ <= opt.lowerZ)
-    {
-        std::cerr << "Invalid height band: upperZ must be greater than lowerZ\n";
-        return 1;
-    }
 
-    double effectiveLowerZ = static_cast<double>(opt.lowerZ);
-    double effectiveUpperZ = static_cast<double>(opt.upperZ);
+    // ===== Auto-detect floor/ceiling from walls Z histogram =====
     double wallsMinZ = static_cast<double>(walls->points[0].z);
     double wallsMaxZ = static_cast<double>(walls->points[0].z);
-    int inBandCount = 0;
     for (const auto &p : walls->points)
     {
         const double z = static_cast<double>(p.z);
         wallsMinZ = std::min(wallsMinZ, z);
         wallsMaxZ = std::max(wallsMaxZ, z);
-        if (z >= effectiveLowerZ && z <= effectiveUpperZ)
+    }
+
+    // Build Z histogram with 100 bins
+    const int nHistBins = 100;
+    const double histBinSize = (wallsMaxZ - wallsMinZ) / static_cast<double>(nHistBins);
+    std::vector<int> zHist(nHistBins, 0);
+    for (const auto &p : walls->points)
+    {
+        int bin = static_cast<int>((static_cast<double>(p.z) - wallsMinZ) / histBinSize);
+        bin = std::clamp(bin, 0, nHistBins - 1);
+        zHist[bin]++;
+    }
+
+    // Find the two largest peaks (floor and ceiling are dense horizontal layers)
+    // Floor = lowest dense peak, Ceiling = highest dense peak
+    // A peak: bin count > 2% of total wall points
+    const int peakThreshold = static_cast<int>(walls->points.size() * 0.02);
+    int floorBin = -1, ceilingBin = -1;
+    for (int i = 0; i < nHistBins; ++i)
+    {
+        if (zHist[i] > peakThreshold)
         {
-            ++inBandCount;
+            if (floorBin < 0) floorBin = i;
+            ceilingBin = i;  // keep updating to get the highest peak
         }
     }
-    if (inBandCount == 0)
+
+    double effectiveLowerZ, effectiveUpperZ;
+    if (floorBin >= 0 && ceilingBin > floorBin)
     {
-        effectiveLowerZ = wallsMinZ;
-        effectiveUpperZ = wallsMaxZ;
-        std::cout << "[projection] warning: no points in configured Z band ["
-                  << opt.lowerZ << ", " << opt.upperZ << "]"
-                  << ", fallback to walls Z range [" << effectiveLowerZ << ", " << effectiveUpperZ << "]\n";
+        // Floor top edge + margin
+        double floorZ = wallsMinZ + (static_cast<double>(floorBin) + 1.0) * histBinSize;
+        // Ceiling bottom edge - margin
+        double ceilingZ = wallsMinZ + static_cast<double>(ceilingBin) * histBinSize;
+        double margin = (ceilingZ - floorZ) * 0.1;  // 10% margin
+        margin = std::max(margin, 0.2);  // at least 20cm
+        effectiveLowerZ = floorZ + margin;
+        effectiveUpperZ = ceilingZ - margin;
+        std::cout << "[projection] AUTO height detection: floor ~" << floorZ
+                  << ", ceiling ~" << ceilingZ
+                  << " => slice band [" << effectiveLowerZ << ", " << effectiveUpperZ << "]\n";
     }
+    else
+    {
+        // Fallback: use middle 60% of Z range
+        double range = wallsMaxZ - wallsMinZ;
+        effectiveLowerZ = wallsMinZ + range * 0.2;
+        effectiveUpperZ = wallsMaxZ - range * 0.2;
+        std::cout << "[projection] AUTO fallback: using middle 60% of Z range ["
+                  << effectiveLowerZ << ", " << effectiveUpperZ << "]\n";
+    }
+
+    // Print histogram summary for debugging
+    std::cout << "[projection] Z histogram (walls after alignment):\n";
+    for (int i = 0; i < nHistBins; ++i)
+    {
+        if (zHist[i] > peakThreshold)
+        {
+            double lo = wallsMinZ + i * histBinSize;
+            double hi = lo + histBinSize;
+            std::cout << "  bin[" << i << "] Z=[" << lo << "," << hi << "]: " << zHist[i] << " pts";
+            if (i == floorBin) std::cout << " <-- FLOOR";
+            if (i == ceilingBin) std::cout << " <-- CEILING";
+            std::cout << "\n";
+        }
+    }
+
     if (effectiveUpperZ <= effectiveLowerZ)
     {
-        std::cerr << "Invalid effective Z band after fallback\n";
+        std::cerr << "Invalid effective Z band after auto-detection\n";
         return 1;
     }
     const double sliceHeight = (effectiveUpperZ - effectiveLowerZ) / static_cast<double>(numSlices);
