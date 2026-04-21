@@ -2,7 +2,7 @@
 
 > **基于开放词汇语义分割的室内三维点云语义实例分割与 CAD 平面图生成**
 
-本项目实现了一套从 LiDAR 扫描点云到 2D CAD 平面图的自动化处理管线 (Pipeline)，核心思路是利用 2D 基础视觉模型（RAM + GroundingDINO + SAM）对多视角图像进行开放词汇语义分割，再通过自研的多帧 2D→3D 投影融合算法将语义标签迁移至三维点云，最终提取建筑结构生成 CAD 平面图。
+本项目实现了一套从 LiDAR 扫描点云到 2D CAD 平面图的自动化处理管线 (Pipeline)，核心思路是利用 2D 基础视觉模型（RAM + GroundingDINO + SAM）对多视角图像进行开放词汇语义分割，再通过自研的多帧 2D→3D 投影融合算法将语义标签迁移至三维点云，最终提取建筑结构生成 CAD 直线段平面图。
 
 ---
 
@@ -12,36 +12,31 @@
 PointCloud2CAD/
 ├── rma-dino-sam/               # 阶段一：2D 开放词汇语义分割 (Python)
 │   ├── main.py                 # 主入口脚本
-│   ├── clip/                   # OpenAI CLIP 模型
 │   ├── recognize-anything/     # RAM 图像标签识别
 │   ├── GroundingDINO/          # Grounding DINO 开放集目标检测
 │   ├── segment_anything/       # SAM 分割一切模型
-│   └── EfficientSAM/          # 高效 SAM 变体 (可选)
+│   └── clip/                   # OpenAI CLIP 模型
 │
 ├── PointCloud_Segement_v0/     # 阶段二：3D 语义实例融合 (C++)
 │   ├── main.cpp                # 主入口
 │   ├── src/                    # 核心源码
 │   │   ├── mapping/            # 语义建图：体素哈希、贝叶斯标签融合、实例管理
-│   │   ├── cluster/            # 图优化 (PoseGraph)
-│   │   ├── sgloop/             # 场景图
 │   │   └── tools/              # IO、计时、可视化工具
 │   ├── cmake/                  # CMake 依赖配置
-│   └── test_data/              # 示例数据 (需自行准备，见下方说明)
+│   └── test_data/              # 示例数据（含完整测试集）
 │
-└── LiDAR2BIM-Registration/     # 阶段三：点云配准与 CAD 生成 (C++/Python)
-    ├── preprocess/             # Python 预处理脚本
-    │   ├── geometry/           # pc2img 投影、lineseg 线段提取
-    │   └── datasets/           # 数据集管理
-    ├── src/                    # C++ 配准算法
-    ├── include/                # 头文件
-    ├── Thirdparty/             # 第三方库 (backward-cpp, nanoflann, point-sam)
-    └── configs/                # 场景配置文件
+├── l2bim/                      # 阶段三：点云 → 2D CAD 直线段提取 (C++/Python)
+│   ├── examples/
+│   │   ├── cpp/pcd_projection.cpp          # ★ Step 1: 点云投影 (C++)
+│   │   └── python/wall_regularization_v2.py # ★ Step 2: 直线段检测与规则化 (Python)
+│   ├── src/                    # C++ 源码（投影、栅格化、线段检测）
+│   ├── pcds/                   # 测试点云
+│   └── Thirdparty/             # 第三方库 (nanoflann, point-sam)
+│
+├── PIPELINE.md                 # 详细流程文档
+├── INSTALL.md                  # 环境部署指南
+└── README.md                   # ← 本文档
 ```
-
----
-
-> 📖 **详细流程文档**：三个阶段的完整串联方式、数据流转细节、每个模块的输入输出格式说明，
-> 请查阅 **[docs/PIPELINE.md](docs/PIPELINE.md)**。
 
 ---
 
@@ -73,72 +68,15 @@ RGB 图像序列                          LiDAR 点云 (.pcd)
                    │
                    ▼
 ┌──────────────────────────────┐
-│   墙面提取 → 线段拟合 → CAD  │
+│  点云投影 → 直线段检测 → CAD  │
 └──────────────────────────────┘
 ```
 
----
-
-## 环境配置
-
-### 阶段一：rma-dino-sam (Python)
-
-**推荐环境**：Python 3.11 + PyTorch ≥ 2.6（CPU 或 GPU）
-
-```bash
-# 1. 创建 conda 环境
-conda create -n gsam python=3.11
-conda activate gsam
-
-# 2. 安装 PyTorch (参考 https://pytorch.org/get-started/previous-versions/)
-pip3 install torch torchvision
-
-# 3. 安装子模块
-python -m pip install -e segment_anything
-pip install --no-build-isolation -e GroundingDINO
-cd recognize-anything && pip install -r requirements.txt && pip install -e . && cd ..
-
-# 4. 安装 CLIP（如 pip 安装 RAM 时 git 连接失败）
-cd clip && pip install ftfy regex tqdm && pip install . && cd ..
-
-# 5. 其他依赖
-pip install opencv-python pycocotools matplotlib onnxruntime onnx
-```
-
-**模型权重下载**：
-
-| 模型 | 下载地址 |
-|------|---------|
-| GroundingDINO (SwinT) | [groundingdino_swint_ogc.pth](https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth) |
-| SAM (ViT-H) | [sam_vit_h_4b8939.pth](https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth) |
-| RAM (14M) | [ram_swin_large_14m.pth](https://huggingface.co/spaces/xinyu1205/Recognize_Anything-Tag2Text/blob/main/ram_swin_large_14m.pth) |
-| bert-base-uncased | 夸克网盘: https://pan.quark.cn/s/e6cda95e1ca1 |
-
-> ⚠️ 需要在本地配置 `bert-base-uncased` 路径，详见 `rma-dino-sam/README.md`。
-
-### 阶段二：PointCloud_Segement_v0 (C++)
-
-**依赖库**：
-
-| 库 | 参考版本 |
-|----|---------|
-| Eigen | 3.3.7 |
-| Jsoncpp | 1.7.4 |
-| OpenCV | 4.2.0 |
-| Open3D | 0.19 |
-| TBB | 2020.1 |
-| CMake | ≥ 4.0 |
-
-```bash
-cd PointCloud_Segement_v0
-mkdir build && cd build
-cmake ..
-make
-```
-
-### 阶段三：LiDAR2BIM-Registration (C++/Python)
-
-详见 `LiDAR2BIM-Registration/docs/install.md`。
+| 阶段 | 模块 | 语言 | 核心功能 |
+|------|------|------|---------|
+| **一** | `rma-dino-sam/` | Python | RAM + GroundingDINO + SAM 开放词汇语义实例分割 |
+| **二** | `PointCloud_Segement_v0/` | C++ | 2D→3D 反投影、多帧贝叶斯融合、跨帧实例合并 |
+| **三** | `l2bim/` | C++ + Python | RANSAC 分离 → 多切片投影 → 骨架化 → Hough 检测 → 规则化 |
 
 ---
 
@@ -147,53 +85,50 @@ make
 阶段二所需的输入数据目录结构：
 
 ```
-/path/to/data/
+data_folder/
 ├── color/
 │   ├── left/         # 左相机去畸变 RGB 图像 (.jpg)
 │   └── right/        # 右相机去畸变 RGB 图像 (.jpg)
 ├── colorized.pcd     # LiDAR 点云 (PCD 格式)
 ├── config.yaml       # 相机内参配置 (fx, fy, cx, cy, w, h)
-├── transforms.json   # 图像位姿信息 (由 Studio 导出)
+├── transforms.json   # 图像位姿信息 (由 SLAM 导出)
 └── prediction_no_augment/
-    ├── <timestamp>_label.json   # 阶段一输出的语义标签
-    └── <timestamp>_mask.png     # 阶段一输出的分割 mask
+    ├── <timestamp>_mask.png     # ← 阶段一输出
+    └── <timestamp>_label.json   # ← 阶段一输出
 ```
 
-> `test_data/` 中提供了示例数据结构（不含大文件）。大文件（如 `colorized.pcd`）请通过网盘分发。
+> `test_data/` 中已提供完整的示例数据集，可直接运行 demo。
 
 ---
 
-## 运行流程
+## 快速运行
 
-### Step 1: 2D 语义分割
+> 环境搭建详见 **[INSTALL.md](INSTALL.md)**。
 
 ```bash
+# ━━━━ 阶段一：2D 语义分割 (GPU 推荐) ━━━━
 cd rma-dino-sam
-python main.py "<输入图像文件夹>" "<输出文件夹>"
-```
+export WEIGHTS_DIR="/path/to/weights"
+# 必须分别处理左右相机图像，输出到同一目录
+python main.py "<数据目录>/color/left"  "<数据目录>/prediction_no_augment"
+python main.py "<数据目录>/color/right" "<数据目录>/prediction_no_augment"
 
-输出每张图像的 `*_label.json` 和 `*_mask.png`。
-
-### Step 2: 3D 语义实例融合
-
-```bash
+# ━━━━ 阶段二：3D 语义实例融合 ━━━━
 cd PointCloud_Segement_v0/build
-./Test_main "<数据文件夹路径>" "<输出文件夹路径>"
+cmake .. && make
+./Test_main ../test_data ../test_data/outputs/run01
+
+# ━━━━ 阶段三 Step 1：点云投影 (C++) ━━━━
+cd l2bim
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release && make pcd_projection && cd ..
+./bin/pcd_projection ../PointCloud_Segement_v0/test_data/outputs/run01/removed.pcd output/run01
+
+# ━━━━ 阶段三 Step 2：直线段检测与规则化 (Python) ━━━━
+python examples/python/wall_regularization_v2.py \
+    --input output/run01/projection_lines_refined.png \
+    --output-dir output/run01
 ```
-
-**输出文件说明**：
-
-| 文件 | 说明 |
-|------|------|
-| `segement.pcd` | 分割后的实例点云（颜色编码实例 ID） |
-| `removed.pcd` | 移除已识别物体后的点云 |
-| `info.txt` | 实例 → 语义标签映射 |
-| `points.txt` | 每个实例的点索引（二进制格式） |
-| `config.txt` | 运行配置信息 |
-
-### Step 3: CAD 平面图生成
-
-详见 `LiDAR2BIM-Registration/docs/demo.md`。
 
 ---
 
@@ -205,9 +140,19 @@ cd PointCloud_Segement_v0/build
 - **2D → 3D 语义投影** — 利用相机内外参将 2D 分割结果反投影到点云
 - **贝叶斯标签融合** — 基于多帧观测的概率语义标签决策
 - **多帧数据关联与实例合并** — 跨帧实例 ID 一致性维护
-- **墙面提取与 CAD 线段输出** — 从语义点云中提取建筑结构
+- **点云投影与 CAD 直线段提取** — 多切片投票投影 + 骨架化 + Hough 检测 + 曼哈顿规则化
 
-复用的开源模型：RAM、GroundingDINO、SAM、CLIP、pc2img、lineseg。
+复用的开源模型：RAM、GroundingDINO、SAM、CLIP。
+
+---
+
+## 文档索引
+
+| 文档 | 内容 |
+|------|------|
+| **[PIPELINE.md](PIPELINE.md)** | 三个阶段的完整串联流程、数据格式与流转细节 |
+| **[INSTALL.md](INSTALL.md)** | 环境部署、依赖安装、版本管理与冲突解决 |
+| **[l2bim/README.md](l2bim/README.md)** | 阶段三模块的详细说明 |
 
 ---
 

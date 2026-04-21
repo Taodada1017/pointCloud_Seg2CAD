@@ -12,10 +12,9 @@
 - [前置要求](#前置要求)
 - [阶段一：rma-dino-sam（Python）](#阶段一rma-dino-sampython)
 - [阶段二：PointCloud_Segement_v0（C++）](#阶段二pointcloud_segement_v0c)
-- [阶段三：LiDAR2BIM-Registration（C++ / Python）](#阶段三lidar2bim-registrationc--python)
+- [阶段三：l2bim（C++ / Python）](#阶段三l2bimc--python)
 - [依赖版本冲突分析与解决](#依赖版本冲突分析与解决)
 - [模型权重与数据下载](#模型权重与数据下载)
-- [阶段二 → 阶段三 衔接脚本](#阶段二--阶段三-衔接脚本)
 - [常见问题](#常见问题)
 - [完整依赖版本清单](#完整依赖版本清单)
 
@@ -53,7 +52,7 @@
 |------|---------|-------------|------|
 | **阶段一** rma-dino-sam | 可选 | ✅ 支持 | `main.py` 默认 `device = "cpu"`；GroundingDINO 在无 CUDA 时自动编译 CPU 版本 |
 | **阶段二** PointCloud_Segement_v0 | 不需要 | ✅ 完全 CPU | 纯 C++ 项目，使用 TBB 做 CPU 多线程并行 |
-| **阶段三** LiDAR2BIM-Registration | 不需要 | ✅ 完全 CPU | C++ 使用 OpenMP 并行；Python 预处理也无 GPU 依赖 |
+| **阶段三** l2bim | 不需要 | ✅ 完全 CPU | Step 1 (C++) 使用 OpenMP 并行；Step 2 (Python) 无 GPU 依赖 |
 
 ### CPU vs GPU 性能对比（阶段一）
 
@@ -299,78 +298,88 @@ make -j$(nproc)
 
 ---
 
-## 阶段三：LiDAR2BIM-Registration（C++ / Python）
+## 阶段三：l2bim（C++ / Python）
 
-> 点云配准与 CAD 生成。需要 C++ 和 Python 双环境。
+> 点云 → 2D CAD 直线段提取。分为 Step 1 (C++ 投影) 和 Step 2 (Python 规则化) 两步。
 
-### 3.1 安装系统依赖
+### 3.1 Step 1 依赖：C++ 系统库
 
 ```bash
+# Ubuntu
 sudo apt-get update
-sudo apt install -y \
-    libboost-dev \
-    libyaml-cpp-dev \
-    libomp-dev \
-    libgmp-dev \
-    libmpfr-dev \
+sudo apt-get install -y \
     libpcl-dev \
     pcl-tools \
-    libgoogle-glog-dev
+    libeigen3-dev \
+    libopencv-dev \
+    libboost-dev \
+    libomp-dev
 ```
-
-### 3.2 Python 环境（预处理）
 
 ```bash
-conda create -n libim python=3.10 -y
-conda activate libim
-cd LiDAR2BIM-Registration
-pip install -r requirements.txt
+# macOS (Homebrew)
+brew install pcl eigen opencv boost libomp cmake
 ```
+
+> **注意**：阶段二使用 **Open3D** 处理点云，阶段三 Step 1 使用 **PCL** (Point Cloud Library)，两者是不同的点云库。
+
+### 3.2 Step 2 依赖：Python
+
+Step 2 (`wall_regularization_v2.py`) 是轻量 Python 脚本，仅需：
+
+```bash
+pip install opencv-python numpy
+```
+
+> 可在任意 Python 3.8+ 环境中运行，无需 GPU，无需 Conda 专属环境。
 
 ### 3.3 编译
 
 ```bash
-cd LiDAR2BIM-Registration
+cd l2bim
 
-# 1. 编译第三方库 point-sam
+# 1. （可选）编译第三方库 point-sam
 mkdir -p Thirdparty/point-sam/build
 cd Thirdparty/point-sam/build
 cmake ..
 make -j$(nproc)
 cd ../../..
 
-# 2. 编译主项目
-mkdir build && cd build
-cmake ..
-make -j$(nproc)
+# 2. 编译主项目（只需构建 pcd_projection 目标）
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make pcd_projection
 cd ..
 ```
 
-### 3.4 数据准备
+Windows：
 
-```bash
-export LiBIM_UST_ROOT="/path/to/LiBIM-UST/"
-
-# 生成子图 + 平面分割
-python examples/python/data_process/submap3d_generator.py
-./Thirdparty/point-sam/build/plane_seg
-
-# 生成基准数据
-python examples/python/data_process/make_benchmarks.py
+```powershell
+cd l2bim
+cmake -S . -B build_vs17_x64 -G "Visual Studio 17 2022" -A x64
+cmake --build build_vs17_x64 --config Release --target pcd_projection
 ```
 
-### 3.5 验证安装
+### 3.4 验证安装
 
 ```bash
-export LiBIM_UST_ROOT="/path/to/LiBIM-UST/"
-bin/demo_reg
+# Step 1: C++ 投影
+cd l2bim
+./bin/pcd_projection pcds/001.pcd output/001
+
+# Step 2: Python 规则化
+python examples/python/wall_regularization_v2.py \
+    --input output/001/projection_lines_refined.png \
+    --output-dir output/001
 ```
+
+如果 `output/001/` 下生成了 `projection.png` 和 `v2_step8_final_result.png`，则安装成功。
 
 ---
 
 ## 依赖版本冲突分析与解决
 
-> 本项目三个阶段使用**独立的运行环境**（两个 Conda 环境 + C++ 编译），大部分依赖互不干扰。但以下几处需要注意：
+> 本项目三个阶段使用**独立的运行环境**（Conda 环境 + C++ 编译），大部分依赖互不干扰。但以下几处需要注意：
 
 ### 环境隔离概览
 
@@ -386,13 +395,14 @@ bin/demo_reg
 └──────────────────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────────────────┐
-│  Conda 环境: libim (Python 3.10) + 系统 C++  ← 阶段三        │
-│  open3d==0.19.0, numpy==1.26.4, scipy==1.15.1               │
-│  Boost, PCL, yaml-cpp, glog, OpenMP (系统 C++)               │
+│  系统 C++ 工具链 + 任意 Python 3.8+  ← 阶段三                │
+│  C++: PCL, Eigen, OpenCV, Boost, OpenMP                      │
+│  Python: opencv-python, numpy                                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-> ✅ 阶段一与阶段三使用**不同的 Conda 环境**，Python 依赖完全隔离，不会冲突。
+> ✅ 阶段一使用独立 Conda 环境 `gsam`，与阶段三 Python 依赖无冲突。
+> ✅ 阶段三 Python 仅需 `opencv-python` + `numpy`，可在阶段一的 `gsam` 环境中直接运行，也可在独立环境中运行。
 
 ### ⚠️ 冲突点 1：timm 版本（阶段一内部）
 
@@ -434,35 +444,24 @@ pip install transformers==4.38.2
 # 修改 recognize-anything/ram/models/bert.py 第 28 行
 ```
 
-### ⚠️ 冲突点 3：opencv-python vs opencv-python-headless
-
-| 来源 | 包名 |
-|------|------|
-| 阶段一（gsam 环境） | `opencv-python` |
-| 阶段三（libim 环境） | `opencv-python-headless==4.10.0.84` |
-
-**分析**：`opencv-python` 和 `opencv-python-headless` 是**互斥包**（同一环境只能装一个）。但由于阶段一和三使用不同 Conda 环境，**不存在实际冲突**。
-
-> ⚠️ **注意**：如果你尝试把所有 Python 依赖装进同一个环境，这两个包会冲突！请务必保持环境隔离。
-
 ### ✅ 不冲突的共享依赖
 
-以下依赖在多个子模块中出现，但不会产生版本冲突：
+以下依赖在多个阶段中出现，但不会产生版本冲突：
 
 | 依赖 | 阶段一 | 阶段三 | 是否冲突 | 原因 |
 |------|--------|--------|---------|------|
-| `scipy` | 无版本号 | ==1.15.1 | ❌ | 不同环境 |
-| `numpy` | 无版本号 | ==1.26.4 | ❌ | 不同环境 |
-| `torch` | ≥2.6 | 不需要 | ❌ | 阶段三不用 PyTorch |
-| `Eigen` (C++) | 系统 `find_package` | 硬编码 `/usr/include/eigen3` | ❌ | 分别编译，不互相影响 |
-| `OpenCV` (C++) | 系统 `find_package` | 系统 `find_package` | ❌ | 使用相同系统库 |
+| `numpy` | 无版本号 | 无版本号 | ❌ | 兼容 |
+| `opencv-python` | 最新 | 最新 | ❌ | 相同包 |
+| `Eigen` (C++) | 系统 `find_package` | 系统 `find_package` | ❌ | 共享系统库 |
+| `OpenCV` (C++) | 系统 `find_package` | 系统 `find_package` | ❌ | 共享系统库 |
 
 ### 📌 推荐安装策略
 
-1. **严格使用独立 Conda 环境**：`gsam`（阶段一）和 `libim`（阶段三）绝不混用
+1. **阶段一使用独立 Conda 环境 `gsam`**
 2. **阶段一按顺序安装**：SAM → GroundingDINO → RAM → CLIP（RAM 最后装，确保 timm 降级）
 3. **锁定 transformers 版本**：`pip install transformers==4.38.2`（避免过新版本兼容问题）
 4. **C++ 依赖使用系统包管理器**：`apt-get` (Ubuntu) 或 `brew` (macOS)
+5. **阶段三 Python** 可复用 `gsam` 环境或直接在系统 Python 中运行
 
 ---
 
@@ -474,102 +473,6 @@ pip install transformers==4.38.2
 |------|------|---------|
 | 三个模型 checkpoint | 阶段一 | [夸克网盘](https://pan.quark.cn/s/2fd76d205f7a) |
 | bert-base-uncased | 阶段一 | [夸克网盘](https://pan.quark.cn/s/e6cda95e1ca1) |
-| LiBIM-UST 数据集 | 阶段三 | [OneDrive](https://hkustconnect-my.sharepoint.com/:u:/g/personal/hhuangce_connect_ust_hk/ERoCJi5Q5EZGudr8pQYOXsMBjUsin82b0RYxDVmVQmYCDg?e=ecnrwF) |
-| LiBIM-UST processed | 阶段三（可选，跳过预处理） | [OneDrive](https://hkustconnect-my.sharepoint.com/:u:/g/personal/hhuangce_connect_ust_hk/EYiHE-lKVwdLgLRxfDWMpTwBok3Dk_OjmkSkhejte-FcfA?e=AljpIr) |
-
----
-
-## 阶段二 → 阶段三 衔接脚本
-
-阶段二的输出和阶段三的输入之间存在格式差异，需要通过 `stage2_to_stage3.py` 衔接。
-
-### 核心原理
-
-```
-阶段二输出 (removed.pcd / colorized.pcd + info.txt + points.txt)
-    ↓ 语义分离 (walls / ground)
-    ↓ 按高度裁剪 (0.2m ~ 1.9m)
-    ↓ 投影到 z=0 平面
-    ↓ Points2Image 生成二值图像
-    ↓ OpenCV HoughLinesP 检测线段
-    ↓ 像素坐标 → 物理坐标
-阶段三输出 (linesegs.txt + walls_2d.png)
-```
-
-### 两种使用模式
-
-**(a) 完整模式** — 语义分离 + 线段提取
-
-适用于阶段二完整运行后，有全部输出文件时：
-
-```bash
-python stage2_to_stage3.py <阶段二输出目录> \
-    --slam <colorized.pcd路径> \
-    --output pipeline_output
-```
-
-例如：
-
-```bash
-python stage2_to_stage3.py \
-    PointCloud_Segement_v0/test_data/outputs/obb-merge02 \
-    --slam PointCloud_Segement_v0/test_data/colorized.pcd \
-    --output pipeline_output
-```
-
-此模式会：
-1. 读取 `colorized.pcd`（原始 SLAM 点云）
-2. 用 `info.txt` + `points.txt` 按语义标签分离出 `walls.pcd` 和 `ground.pcd`
-3. 从墙壁点云提取 2D 线段
-
-**(b) 简化模式** — 直接从单个点云生成线段
-
-适用于没有完整语义数据，或者已经有一个背景点云时：
-
-```bash
-python stage2_to_stage3.py --simple <点云文件.pcd> --output pipeline_output
-```
-
-例如：
-
-```bash
-# 直接用 removed.pcd（已剔除家具的背景点云）
-python stage2_to_stage3.py \
-    --simple PointCloud_Segement_v0/test_data/outputs/obb-merge02/removed.pcd \
-    --output pipeline_output
-```
-
-> **前提条件**：输入点云的 Z 轴需大致与重力方向对齐（地面水平）。
-> SLAM 输出的点云通常已满足此条件。
-
-### 可调参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--min-height` | 0.2 | 墙壁最低高度（米），低于此高度的点被排除 |
-| `--max-height` | 1.9 | 墙壁最高高度（米），高于此高度的点被排除 |
-| `--scale` | 60 | 投影比例（像素/米），值越大图像越精细 |
-| `--dilate` | 3 | 膨胀核大小，连接相邻点 |
-| `--hough-threshold` | 60 | Hough 变换累加器阈值 |
-| `--hough-min-length` | 30 | 最小线段长度（像素） |
-| `--hough-max-gap` | 30 | 线段内最大间隙（像素） |
-
-### 输出文件
-
-| 文件 | 说明 |
-|------|------|
-| `walls.pcd` | 分离后的墙壁点云（仅完整模式） |
-| `ground.pcd` | 分离后的地面点云（仅完整模式） |
-| `walls_2d.png` | 2D 投影二值图像 |
-| `linesegs.txt` | 2D 线段，每行 `x1 y1 x2 y2`（物理坐标，单位：米） |
-
-### 依赖
-
-```bash
-pip install open3d opencv-python pillow numpy
-```
-
-> 注意：此脚本不依赖阶段三的 import 链，所有核心逻辑已内联实现。
 
 ---
 
@@ -587,6 +490,24 @@ A: 确保 Open3D 的 C++ 库已正确安装，并设置 `Open3D_DIR`：
 cmake .. -DOpen3D_DIR=/usr/local/lib/cmake/Open3D
 ```
 
+### Q: CMake 找不到 PCL？
+
+A: 确保 PCL 已通过系统包管理器安装：
+
+```bash
+# Ubuntu
+sudo apt-get install -y libpcl-dev pcl-tools
+
+# macOS
+brew install pcl
+```
+
+如果仍找不到，手动指定：
+
+```bash
+cmake .. -DPCL_DIR=/usr/lib/x86_64-linux-gnu/cmake/pcl
+```
+
 ### Q: GroundingDINO 编译报错？
 
 A: 确保使用了 `--no-build-isolation` 参数：
@@ -601,11 +522,22 @@ A: 阶段一（Python）可以在 Windows 上运行。阶段二和三的 C++ 代
 
 ### Q: 能否在 macOS 上运行？
 
-A: 阶段一（Python / CPU 模式）可以在 macOS 上运行。阶段二需要安装 macOS 版本的依赖库（通过 Homebrew）。阶段三的 PCL 和 glog 在 macOS 上可通过 Homebrew 安装。
+A: 阶段一（Python / CPU 模式）可以在 macOS 上运行。阶段二需要安装 macOS 版本的依赖库（通过 Homebrew）。阶段三的 PCL 在 macOS 上可通过 Homebrew 安装。
 
 ---
 
 ## 完整依赖版本清单
+
+### 环境总览
+
+| 阶段 | 环境 | 关键依赖 | 备注 |
+|------|------|----------|------|
+| 阶段一 | Conda `gsam` (Python 3.11) + PyTorch + GPU | RAM, GroundingDINO, SAM 权重文件 | 可在远程 GPU 服务器运行 |
+| 阶段二 | C++ 17 (CMake + Open3D + Eigen + OpenCV) | Open3D (C++) | 需要编译 |
+| 阶段三 Step 1 | C++ 17 (CMake + **PCL** + Eigen + OpenCV) | PCL (Point Cloud Library) | 需要编译 |
+| 阶段三 Step 2 | Python 3.8+ | `opencv-python`, `numpy` | 轻量依赖 |
+
+> **注意**：阶段二使用 **Open3D** 处理点云，阶段三 Step 1 使用 **PCL**，两者是不同的点云库。
 
 ### 阶段一：rma-dino-sam — Conda 环境 `gsam` (Python 3.11)
 
@@ -644,40 +576,34 @@ A: 阶段一（Python / CPU 模式）可以在 macOS 上运行。阶段二需要
 | Open3D | **0.19** | 源码编译 / brew | ⚠️ 需要 C++ 库，pip 版不够 |
 | TBB | 2020.1+ | `libtbb-dev` | CPU 并行 |
 
-### 阶段三：LiDAR2BIM-Registration — Conda 环境 `libim` (Python 3.10) + 系统 C++
+### 阶段三：l2bim — 系统 C++ + Python
 
-**Python 依赖**（`requirements.txt` 精确锁版本）：
-
-| 包 | 版本 | 备注 |
-|----|------|------|
-| Python | **3.10** | Conda 创建 |
-| open3d | ==0.19.0 | Python 版（与阶段二 C++ 版不冲突） |
-| numpy | ==1.26.4 | — |
-| scipy | ==1.15.1 | — |
-| matplotlib | ==3.10.0 | — |
-| numba | ==0.61.0 | JIT 加速 |
-| shapely | ==2.0.6 | 几何计算 |
-| scikit-image | ==0.25.1 | 图像处理 |
-| opencv-python-headless | ==4.10.0.84 | headless 版（无 GUI） |
-| easydict | ==1.10 | 配置字典 |
-
-**C++ 系统依赖**：
+**Step 1 (C++) 系统依赖**：
 
 | 库 | 安装方式 | 备注 |
 |----|---------|------|
+| PCL | `libpcl-dev` + `pcl-tools` | 点云处理 (Point Cloud Library) |
+| Eigen3 | 系统自带（与阶段二共享） | 线性代数 |
+| OpenCV | 系统自带（与阶段二共享） | 图像处理 |
 | Boost | `libboost-dev` | 通用 C++ 库 |
-| Eigen3 | 系统自带（与阶段二共享） | — |
-| yaml-cpp | `libyaml-cpp-dev` | YAML 配置解析 |
-| glog | `libgoogle-glog-dev` | 日志 |
-| PCL | `libpcl-dev` | 点云处理 |
 | OpenMP | `libomp-dev` | CPU 并行 |
-| OpenCV | 系统自带（与阶段二共享） | — |
-| GMP/MPFR | `libgmp-dev libmpfr-dev` | CGAL 可选依赖 |
+
+**Step 2 (Python) 依赖**：
+
+| 包 | 版本 | 备注 |
+|----|------|------|
+| Python | **≥ 3.8** | 任意环境即可 |
+| opencv-python | 最新 | 图像处理 |
+| numpy | 最新 | 数值计算 |
 
 **第三方库**（源码随项目附带，无需额外下载）：
 
 | 库 | 位置 | 说明 |
 |----|------|------|
-| backward-cpp | `Thirdparty/backward-cpp/` | C++ 调试回溯 |
 | nanoflann | `Thirdparty/nanoflann/` | KD-Tree 快速近邻搜索 |
-| point-sam | `Thirdparty/point-sam/` | 平面分割（需编译） |
+| point-sam | `Thirdparty/point-sam/` | 平面分割（可选，需编译） |
+
+---
+
+> **文档版本**: 2026-04-21
+> **适用代码**: PointCloud2CAD 主分支
