@@ -165,10 +165,99 @@ def remove_duplicate_segments(segments, angle_thresh=5.0, dist_thresh=8.0, overl
     
     return [s for s, k in zip(segs, keep) if k]
 
+def px_to_meter(px_val, grid_size):
+    """像素坐标 → 米制坐标"""
+    return px_val * grid_size
+
+def export_dxf(segments, grid_size, origin_x, origin_y, filepath):
+    """导出线段为 DXF R12 格式（AutoCAD 可读）"""
+    with open(filepath, 'w') as f:
+        # DXF header
+        f.write("0\nSECTION\n2\nHEADER\n")
+        f.write("9\n$INSUNITS\n70\n6\n")  # 6 = meters
+        f.write("0\nENDSEC\n")
+        # Entities section
+        f.write("0\nSECTION\n2\nENTITIES\n")
+        for seg in segments:
+            x1 = origin_x + seg[0] * grid_size
+            y1 = origin_y + seg[1] * grid_size  # 注意：图像Y轴向下，CAD Y轴向上
+            x2 = origin_x + seg[2] * grid_size
+            y2 = origin_y + seg[3] * grid_size
+            f.write(f"0\nLINE\n8\nWALLS\n")  # layer = WALLS
+            f.write(f"10\n{x1:.4f}\n20\n{-y1:.4f}\n30\n0.0\n")  # start point (flip Y)
+            f.write(f"11\n{x2:.4f}\n21\n{-y2:.4f}\n31\n0.0\n")  # end point
+        f.write("0\nENDSEC\n0\nEOF\n")
+
+def export_svg(segments, grid_size, img_w, img_h, filepath):
+    """导出线段为 SVG 格式（带米制标注）"""
+    svg_w = img_w * grid_size
+    svg_h = img_h * grid_size
+    with open(filepath, 'w') as f:
+        f.write(f'<?xml version="1.0" encoding="UTF-8"?>\n')
+        f.write(f'<svg xmlns="http://www.w3.org/2000/svg" '
+                f'width="{svg_w:.2f}m" height="{svg_h:.2f}m" '
+                f'viewBox="0 0 {svg_w:.2f} {svg_h:.2f}">\n')
+        f.write(f'<rect width="{svg_w:.2f}" height="{svg_h:.2f}" fill="white"/>\n')
+        # 墙线
+        for seg in segments:
+            x1, y1 = seg[0]*grid_size, seg[1]*grid_size
+            x2, y2 = seg[2]*grid_size, seg[3]*grid_size
+            length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+            f.write(f'<line x1="{x1:.3f}" y1="{y1:.3f}" '
+                    f'x2="{x2:.3f}" y2="{y2:.3f}" '
+                    f'stroke="black" stroke-width="0.05"/>\n')
+        # 比例尺 (5m)
+        bar_len = 5.0
+        bx, by = svg_w - bar_len - 1.0, svg_h - 1.0
+        f.write(f'<line x1="{bx:.2f}" y1="{by:.2f}" '
+                f'x2="{bx+bar_len:.2f}" y2="{by:.2f}" '
+                f'stroke="red" stroke-width="0.08"/>\n')
+        f.write(f'<text x="{bx+bar_len/2:.2f}" y="{by-0.2:.2f}" '
+                f'text-anchor="middle" font-size="0.4" fill="red">{bar_len:.0f} m</text>\n')
+        f.write('</svg>\n')
+
+def draw_scale_bar(img_bgr, grid_size, bar_length_m=5.0):
+    """在图像上绘制比例尺和尺寸网格"""
+    h, w = img_bgr.shape[:2]
+    result = img_bgr.copy()
+    
+    bar_px = int(bar_length_m / grid_size)
+    margin = 40
+    bx = w - bar_px - margin
+    by = h - margin
+    
+    # 比例尺主线
+    cv2.line(result, (bx, by), (bx+bar_px, by), (0, 0, 255), 3)
+    # 两端竖线
+    cv2.line(result, (bx, by-10), (bx, by+10), (0, 0, 255), 2)
+    cv2.line(result, (bx+bar_px, by-10), (bx+bar_px, by+10), (0, 0, 255), 2)
+    # 标注
+    cv2.putText(result, f"{bar_length_m:.0f} m", (bx + bar_px//2 - 30, by - 15),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+    
+    # 总尺寸标注
+    total_w = w * grid_size
+    total_h = h * grid_size
+    cv2.putText(result, f"{total_w:.1f}m x {total_h:.1f}m", (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 200), 2)
+    
+    # 每 10m 画参考线（浅灰虚线）
+    grid_m = 10.0
+    grid_px = int(grid_m / grid_size)
+    for x in range(0, w, grid_px):
+        for y_dot in range(0, h, 8):
+            cv2.line(result, (x, y_dot), (x, min(y_dot+3, h)), (80, 80, 80), 1)
+    for y in range(0, h, grid_px):
+        for x_dot in range(0, w, 8):
+            cv2.line(result, (x_dot, y), (min(x_dot+3, w), y), (80, 80, 80), 1)
+    
+    return result
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, help="Binary line image (e.g. projection_lines_refined.png)")
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--grid-size", type=float, default=0.025, help="Meters per pixel")
     parser.add_argument("--hough-threshold", type=int, default=30)
     parser.add_argument("--hough-min-length", type=int, default=20)
     parser.add_argument("--hough-max-gap", type=int, default=10)
@@ -224,12 +313,20 @@ def main():
     deduped = remove_duplicate_segments(filtered)
     print(f"\n[Step 4] Deduplicate: {len(filtered)} → {len(deduped)}")
     
+    grid = args.grid_size
+    
     # Step 5: 最终结果（黑底白线）
     final = np.zeros((h, w), dtype=np.uint8)
     for seg in deduped:
         cv2.line(final, (seg[0], seg[1]), (seg[2], seg[3]), 255, 2)
     cv2.imwrite(os.path.join(args.output_dir, "v3_step5_final.png"), final)
     print(f"\n  ✓ v3_step5_final.png — {len(deduped)} wall segments")
+    
+    # Step 5b: 带比例尺和尺寸标注的最终结果
+    final_bgr = cv2.cvtColor(final, cv2.COLOR_GRAY2BGR)
+    final_scaled = draw_scale_bar(final_bgr, grid)
+    cv2.imwrite(os.path.join(args.output_dir, "v3_step5_final_scaled.png"), final_scaled)
+    print(f"  ✓ v3_step5_final_scaled.png (with scale bar & grid)")
     
     # Step 6: 彩色对比（红=原始Hough，绿=合并后）
     vis_compare = np.zeros((h, w, 3), dtype=np.uint8)
@@ -240,8 +337,7 @@ def main():
     cv2.imwrite(os.path.join(args.output_dir, "v3_step6_comparison.png"), vis_compare)
     print("  ✓ v3_step6_comparison.png (Red=raw, Green=merged)")
     
-    # Step 7: 叠加在投影图上
-    # 尝试读取 projection.png 做叠加
+    # Step 7: 叠加在投影图上（带比例尺）
     proj_path = os.path.join(args.output_dir, "projection.png")
     if os.path.exists(proj_path):
         proj = cv2.imread(proj_path)
@@ -249,11 +345,29 @@ def main():
             overlay = proj.copy()
             for seg in deduped:
                 cv2.line(overlay, (seg[0], seg[1]), (seg[2], seg[3]), (0, 0, 255), 2)
+            overlay = draw_scale_bar(overlay, grid)
             cv2.imwrite(os.path.join(args.output_dir, "v3_step7_overlay.png"), overlay)
-            print("  ✓ v3_step7_overlay.png (lines on projection)")
+            print("  ✓ v3_step7_overlay.png (lines on projection with scale)")
     
+    # Step 8: 导出 DXF（AutoCAD 可用）
+    dxf_path = os.path.join(args.output_dir, "floorplan.dxf")
+    export_dxf(deduped, grid, 0.0, 0.0, dxf_path)
+    print(f"  ✓ floorplan.dxf (real-world coordinates in meters)")
+    
+    # Step 9: 导出 SVG（带比例尺）
+    svg_path = os.path.join(args.output_dir, "floorplan.svg")
+    export_svg(deduped, grid, w, h, svg_path)
+    print(f"  ✓ floorplan.svg (scalable vector with ruler)")
+    
+    # 打印墙线统计
     print(f"\n{'='*60}")
-    print(f"Done! {len(deduped)} final wall segments (no Manhattan constraint)")
+    print(f"场景尺寸: {w*grid:.1f}m × {h*grid:.1f}m")
+    print(f"分辨率: {grid*100:.1f} cm/pixel")
+    print(f"墙线数量: {len(deduped)} 条")
+    lengths = [np.sqrt((s[2]-s[0])**2 + (s[3]-s[1])**2) * grid for s in deduped]
+    print(f"墙线总长度: {sum(lengths):.1f}m")
+    print(f"最长墙线: {max(lengths):.1f}m, 最短: {min(lengths):.1f}m")
+    print(f"输出文件: floorplan.dxf (CAD), floorplan.svg (矢量图)")
     print(f"{'='*60}")
 
 if __name__ == "__main__":
