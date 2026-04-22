@@ -28,7 +28,7 @@ build/
 
 # ===== C++ 构建 =====
 PointCloud_Segement_v0/build/
-LiDAR2BIM-Registration/build/
+# LiDAR2BIM-Registration/ 已移除（源码在 l2bim/ 中）
 l2bim/build/
 l2bim/build_*/
 l2bim/bin/

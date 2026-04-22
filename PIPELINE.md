@@ -400,7 +400,7 @@ cd PointCloud_Segement_v0/build
 └──────────────────────────────┘      └────────────────────────────────────┘
 ```
 
-> **依赖库**：Step 1 使用 **PCL** + **OpenCV** + **Eigen**；Step 2 使用 **OpenCV** + **NumPy**。详细安装见 [INSTALL.md](INSTALL.md)。
+> **依赖库**：Step 1 使用 **PCL** + **OpenCV** + **Eigen**；Step 2 使用 **OpenCV** + **NumPy**。详细安装见 [environment.md](environment.md)。
 
 ### 5.2 Step 1：点云投影（C++，pcd_projection）
 
@@ -796,7 +796,7 @@ PointCloud2CAD/
 │       └── nanoflann/                # 快速最近邻搜索
 │
 ├── PIPELINE.md                       # ← 本文档
-├── INSTALL.md                        # 环境部署指南
+├── environment.md                        # 环境部署指南
 └── README.md                         # 项目简介
 ```
 
@@ -804,7 +804,7 @@ PointCloud2CAD/
 
 ## 8. 快速上手
 
-> 环境搭建、依赖安装与版本管理请参考 **[INSTALL.md](INSTALL.md)**。
+> 环境搭建、依赖安装与版本管理请参考 **[environment.md](environment.md)**。
 
 ### 一步步运行
 
